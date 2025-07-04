@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>WebRTC с чатом и передачей файлов</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      height: 90vh;
+      gap: 10px;
+    }
+    #video-section {
+      flex: 3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    video {
+      width: 90%;
+      max-height: 45vh;
+      border: 1px solid #ccc;
+      margin-bottom: 10px;
+      background: black;
+    }
+    #controls {
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 8px 15px;
+      margin-right: 5px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      background-color: #4caf50;
+      color: white;
+      font-weight: 600;
+    }
+    button:disabled {
+      background-color: #999;
+      cursor: not-allowed;
+    }
+    #sidebar {
+      flex: 1;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      padding: 10px;
+      height: 100%;
+    }
+    #room-info {
+      margin-bottom: 15px;
+    }
+    #usersList {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-bottom: 15px;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .user {
+      padding: 5px 8px;
+      margin-bottom: 5px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .user:hover {
+      background: #c8c8c8;
+    }
+    #chat {
+      flex: 2;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #fff;
+    }
+    #chatMessages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      font-size: 0.9em;
+      background: #f9f9f9;
+      border-bottom: 1px solid #ddd;
+    }
+    #chatMessages div {
+      margin-bottom: 8px;
+    }
+    #chatInputContainer {
+      display: flex;
+      padding: 5px;
+    }
+    #chatInput {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      outline: none;
+    }
+    #sendChatBtn {
+      margin-left: 6px;
+      padding: 6px 15px;
+      background: #2196f3;
+      border-radius: 4px;
+      color: white;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    #fileInput {
+      margin-top: 10px;
+    }
+    #downloadLink {
+      margin-top: 10px;
+      display: none;
+      color: #2196f3;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    #statusText {
+      margin-top: 10px;
+      font-style: italic;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <div id="video-section">
+    <h2>Комната: <span id="roomId"></span></h2>
+    <p>Ваш ID: <span id="myId"></span></p>
+
+    <div id="controls">
+      <button id="startBtn">Start Camera</button>
+      <button id="screenBtn">Share Screen</button>
+      <button id="recordBtn">Record</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <a id="downloadLink" href="#" download>Download Recording</a>
+    </div>
+
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+
+    <div id="statusText"></div>
+  </div>
+
+  <div id="sidebar">
+    <div id="room-info">
+      <h3>Участники</h3>
+      <div id="usersList"></div>
+    </div>
+
+    <div id="chat">
+      <div id="chatMessages"></div>
+      <div id="chatInputContainer">
+        <input type="text" id="chatInput" placeholder="Введите сообщение..." />
+        <button id="sendChatBtn">Отправить</button>
+      </div>
+      <input type="file" id="fileInput" />
+    </div>
+  </div>
+
+  <script>
+    // Параметры из URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = urlParams.get('room') || "default";
+    const myId = urlParams.get('user') || Math.random().toString(36).substr(2, 9);
+
+    document.getElementById("roomId").textContent = roomId;
+    document.getElementById("myId").textContent = myId;
+
+    // Элементы DOM
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const usersList = document.getElementById("usersList");
+    const statusText = document.getElementById("statusText");
+
+    const startBtn = document.getElementById("startBtn");
+    const screenBtn = document.getElementById("screenBtn");
+    const recordBtn = document.getElementById("recordBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const downloadLink = document.getElementById("downloadLink");
+
+    const chatMessages = document.getElementById("chatMessages");
+    const chatInput = document.getElementById("chatInput");
+    const sendChatBtn = document.getElementById("sendChatBtn");
+    const fileInput = document.getElementById("fileInput");
+
+    // WebRTC и WebSocket
+    const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+    const ws = new WebSocket(`ws://${location.host}/ws/${roomId}/${myId}`);
+    const peerConnections = {};
+
+    let localStream;
+    let mediaRecorder;
+    let recordedChunks = [];
+
+    // Функция для вывода сообщений в чат
+    function addChatMessage(text, fromSelf = false, isFile = false, fileUrl = '') {
+      const div = document.createElement("div");
+      div.style.fontWeight = fromSelf ? "bold" : "normal";
+      if (isFile) {
+        const link = document.createElement("a");
+        link.href = fileUrl;
+        link.target = "_blank";
+        link.textContent = text;
+        div.appendChild(document.createTextNode(fromSelf ? "Вы отправили файл: " : "Файл от собеседника: "));
+        div.appendChild(link);
+      } else {
+        div.textContent = (fromSelf ? "Вы: " : "") + text;
+      }
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Обновление списка участников
+    function updateUsers(users) {
+      usersList.innerHTML = "";
+      users.filter(u => u !== myId).forEach(u => {
+        const userDiv = document.createElement("div");
+        userDiv.className = "user";
+        userDiv.textContent = u;
+        userDiv.onclick = () => startCall(u);
+        usersList.appendChild(userDiv);
+      });
+    }
+
+    // Запуск камеры
+    startBtn.onclick = async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        statusText.textContent = "📷 Камера включена";
+      } catch (err) {
+        alert("Ошибка доступа к камере и микрофону: " + err.message);
+      }
+    };
+
+    // Демонстрация экрана
+    screenBtn.onclick = async () => {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const videoSender = Object.values(peerConnections).flatMap(pc => pc.getSenders())
+          .find(sender => sender.track?.kind === 'video');
+
+        if (videoSender) {
+          await videoSender.replaceTrack(screenStream.getVideoTracks()[0]);
+        }
+        localVideo.srcObject = screenStream;
+
+        screenStream.getVideoTracks()[0].onended = async () => {
+          if (localStream) {
+            await videoSender.replaceTrack(localStream.getVideoTracks()[0]);
+            localVideo.srcObject = localStream;
+          }
+        };
+      } catch (err) {
+        alert("Ошибка при демонстрации экрана: " + err.message);
+      }
+    };
+
+    // Запись видео
+    recordBtn.onclick = () => {
+      const stream = remoteVideo.srcObject;
+      if (!stream) {
+        alert("Нет активного видео для записи.");
+        return;
+      }
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+
+      mediaRecorder.ondataavailable = e => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        downloadLink.href = url;
+        downloadLink.download = `recording-${Date.now()}.webm`;
+        downloadLink.style.display = "inline-block";
+        statusText.textContent = "Запись остановлена, файл готов для скачивания.";
+      };
+
+      mediaRecorder.start();
+      statusText.textContent = "🔴 Запись началась...";
+      recordBtn.disabled = true;
+      stopBtn.disabled = false;
+    };
+
+    stopBtn.onclick = () => {
+      mediaRecorder.stop();
+      recordBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+
+    // Начать вызов с другим пользователем
+    async function startCall(targetId) {
+      if (peerConnections[targetId]) {
+        alert("Соединение уже установлено");
+        return;
+      }
+      const pc = new RTCPeerConnection(rtcConfig);
+      peerConnections[targetId] = pc;
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          ws.send(JSON.stringify({
+            type: "ice_candidate",
+            candidate: e.candidate,
+            target_id: targetId,
+            sender_id: myId
+          }));
+        }
+      };
+
+      pc.ontrack = e => {
+        remoteVideo.srcObject = e.streams[0];
+        statusText.textContent = `📡 Получен поток от ${targetId}`;
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      ws.send(JSON.stringify({
+        type: "webrtc_offer",
+        offer,
+        target_id: targetId,
+        sender_id: myId
+      }));
+    }
+
+    // Отправка чат-сообщения
+    function sendChatMessage() {
+      const text = chatInput.value.trim();
+      if (!text) return;
+      addChatMessage(text, true);
+      ws.send(JSON.stringify({
+        type: "chat_message",
+        message: text,
+        sender_id: myId
+      }));
+      chatInput.value = "";
+    }
+
+    sendChatBtn.onclick = sendChatMessage;
+    chatInput.onkeydown = e => {
+      if (e.key === "Enter") sendChatMessage();
+    };
+
+    // Передача файлов
+    fileInput.onchange = () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        // Передаем файл как base64 строку
+        const data = reader.result.split(',')[1]; // убрать префикс data:...base64,
+        ws.send(JSON.stringify({
+          type: "file_transfer",
+          filename: file.name,
+          filetype: file.type,
+          data: data,
+          sender_id: myId,
+          target_id: null // разослать всем, можно расширить
+        }));
+        addChatMessage(`Файл отправлен: ${file.name}`, true, true, "");
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = ""; // очистить input
+    };
+
+    // Обработка сообщений от сервера
+    ws.onmessage = async e => {
+      const msg = JSON.parse(e.data);
+
+      if (msg.type === "user_joined" || msg.type === "user_left") {
+        updateUsers(msg.users);
+        return;
+      }
+
+      if (!msg.sender_id || msg.sender_id === myId) return;
+
+      if (msg.type === "chat_message") {
+        addChatMessage(msg.message, false);
+      }
+      else if (msg.type === "file_transfer") {
+        // Преобразуем base64 обратно в Blob и создаем ссылку для скачивания
+        const base64Data = msg.data;
+        const contentType = msg.filetype || "application/octet-stream";
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: contentType });
+        const url = URL.createObjectURL(blob);
+        addChatMessage(msg.filename, false, true, url);
+      }
+      else if (
+        msg.type === "webrtc_offer" ||
+        msg.type === "webrtc_answer" ||
+        msg.type === "ice_candidate"
+      ) {
+        let pc = peerConnections[msg.sender_id];
+        if (!pc) {
+          pc = new RTCPeerConnection(rtcConfig);
+          peerConnections[msg.sender_id] = pc;
+
+          if (localStream) {
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          }
+
+          pc.onicecandidate = e => {
+            if (e.candidate) {
+              ws.send(JSON.stringify({
+                type: "ice_candidate",
+                candidate: e.candidate,
+                target_id: msg.sender_id,
+                sender_id: myId
+              }));
+            }
+          };
+
+          pc.ontrack = e => {
+            remoteVideo.srcObject = e.streams[0];
+            statusText.textContent = `📡 Поток принят от ${msg.sender_id}`;
+          };
+        }
+
+        if (msg.type === "webrtc_offer") {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({
+            type: "webrtc_answer",
+            answer,
+            target_id: msg.sender_id,
+            sender_id: myId
+          }));
+        } else if (msg.type === "webrtc_answer") {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+        } else if (msg.type === "ice_candidate") {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        }
+      }
+    };
+
+    ws.onopen = () => {
+      statusText.textContent = "🟢 Подключено к WebSocket";
+    };
+
+    ws.onerror = e => {
+      statusText.textContent = "🔴 Ошибка соединения WebSocket";
+      console.error(e);
+    };
+
+    ws.onclose = () => {
+      statusText.textContent = "🔴 WebSocket закрыт";
+    };
+  </script>
+</body>
+</html>
