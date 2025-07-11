@@ -2,8 +2,9 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC с чатом и передачей файлов</title>
+  <title>WebRTC с чатом и передачей файлов (с никами)</title>
   <style>
+    /* Стили как у тебя */
     body {
       font-family: Arial, sans-serif;
       margin: 20px;
@@ -23,6 +24,11 @@
       border: 1px solid #ccc;
       margin-bottom: 10px;
       background: black;
+    }
+    #remoteVideosContainer video {
+      width: 200px;
+      border: 1px solid #ccc;
+      margin: 5px;
     }
     #controls {
       margin-bottom: 10px;
@@ -127,16 +133,19 @@
       margin-top: 10px;
       font-style: italic;
       color: green;
+      min-height: 18px;
     }
   </style>
 </head>
 <body>
   <div id="video-section">
     <h2>Комната: <span id="roomId"></span></h2>
-    <p>Ваш ID: <span id="myId"></span></p>
+    <p>Ваш Ник: <span id="myId"></span></p>
 
     <div id="controls">
       <button id="startBtn">Start Camera</button>
+      <button id="toggleMicBtn" disabled>Выкл Микрофон</button>
+      <button id="toggleCamBtn" disabled>Выкл Камера</button>
       <button id="screenBtn">Share Screen</button>
       <button id="recordBtn">Record</button>
       <button id="stopBtn" disabled>Stop</button>
@@ -144,7 +153,7 @@
     </div>
 
     <video id="localVideo" autoplay muted playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="remoteVideosContainer"></div>
 
     <div id="statusText"></div>
   </div>
@@ -165,309 +174,400 @@
     </div>
   </div>
 
-  <script>
-    // Параметры из URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const roomId = urlParams.get('room') || "default";
-    const myId = urlParams.get('user') || Math.random().toString(36).substr(2, 9);
+<script>
+  // Параметры из URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const roomId = urlParams.get('room') || "default";
+  const myId = urlParams.get('user') || Math.random().toString(36).substr(2, 9);
+  const userName = urlParams.get('name') ||  myId.substr(0,4);
 
-    document.getElementById("roomId").textContent = roomId;
-    document.getElementById("myId").textContent = myId;
+  document.getElementById("roomId").textContent = roomId;
+  document.getElementById("myId").textContent = myId;
+  document.getElementById("myId").textContent = userName;
 
-    // Элементы DOM
-    const localVideo = document.getElementById("localVideo");
-    const remoteVideo = document.getElementById("remoteVideo");
-    const usersList = document.getElementById("usersList");
-    const statusText = document.getElementById("statusText");
+  // Мапа userId → userName
+  const userMap = {};
+  userMap[myId] = userName;
 
-    const startBtn = document.getElementById("startBtn");
-    const screenBtn = document.getElementById("screenBtn");
-    const recordBtn = document.getElementById("recordBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const downloadLink = document.getElementById("downloadLink");
+  // Элементы DOM
+  const localVideo = document.getElementById("localVideo");
+  const remoteVideosContainer = document.getElementById("remoteVideosContainer");
+  const usersList = document.getElementById("usersList");
+  const statusText = document.getElementById("statusText");
 
-    const chatMessages = document.getElementById("chatMessages");
-    const chatInput = document.getElementById("chatInput");
-    const sendChatBtn = document.getElementById("sendChatBtn");
-    const fileInput = document.getElementById("fileInput");
+  const startBtn = document.getElementById("startBtn");
+  const toggleMicBtn = document.getElementById("toggleMicBtn");
+  const toggleCamBtn = document.getElementById("toggleCamBtn");
+  const screenBtn = document.getElementById("screenBtn");
+  const recordBtn = document.getElementById("recordBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const downloadLink = document.getElementById("downloadLink");
 
-    // WebRTC и WebSocket
-    const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-    const ws = new WebSocket(`ws://${location.host}/ws/${roomId}/${myId}`);
-    const peerConnections = {};
+  const chatMessages = document.getElementById("chatMessages");
+  const chatInput = document.getElementById("chatInput");
+  const sendChatBtn = document.getElementById("sendChatBtn");
+  const fileInput = document.getElementById("fileInput");
 
-    let localStream;
-    let mediaRecorder;
-    let recordedChunks = [];
+  // WebRTC и WebSocket
+  const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  const ws = new WebSocket(`ws://${location.host}/ws/${roomId}/${myId}`);
 
-    // Функция для вывода сообщений в чат
-    function addChatMessage(text, fromSelf = false, isFile = false, fileUrl = '') {
-      const div = document.createElement("div");
-      div.style.fontWeight = fromSelf ? "bold" : "normal";
-      if (isFile) {
-        const link = document.createElement("a");
-        link.href = fileUrl;
-        link.target = "_blank";
-        link.textContent = text;
-        div.appendChild(document.createTextNode(fromSelf ? "Вы отправили файл: " : "Файл от собеседника: "));
-        div.appendChild(link);
-      } else {
-        div.textContent = (fromSelf ? "Вы: " : "") + text;
-      }
-      chatMessages.appendChild(div);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+  const peerConnections = {};
+
+  let localStream;
+  let mediaRecorder;
+  let recordedChunks = [];
+
+  // Функция для вывода сообщений в чат
+  function addChatMessage(text, fromSelf = false, isFile = false, fileUrl = '', senderName = '') {
+    const div = document.createElement("div");
+    div.style.fontWeight = fromSelf ? "bold" : "normal";
+    if (isFile) {
+      const link = document.createElement("a");
+      link.href = fileUrl;
+      link.target = "_blank";
+      link.textContent = text;
+      div.appendChild(document.createTextNode(fromSelf ? "Вы отправили файл: " : `Файл от ${senderName}: `));
+      div.appendChild(link);
+    } else {
+      div.textContent = fromSelf ? `Вы: ${text}` : `${senderName}: ${text}`;
     }
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
 
-    // Обновление списка участников
-    function updateUsers(users) {
-      usersList.innerHTML = "";
-      users.filter(u => u !== myId).forEach(u => {
+  // Управление удалёнными видео
+  function addRemoteVideo(userId, stream) {
+    let videoElem = document.getElementById("remoteVideo-" + userId);
+    if (!videoElem) {
+      videoElem = document.createElement("video");
+      videoElem.id = "remoteVideo-" + userId;
+      videoElem.autoplay = true;
+      videoElem.playsInline = true;
+      videoElem.style.width = "200px";
+      videoElem.style.border = "1px solid #ccc";
+      videoElem.style.margin = "5px";
+      remoteVideosContainer.appendChild(videoElem);
+    }
+    videoElem.srcObject = stream;
+  }
+
+  function removeRemoteVideo(userId) {
+    const videoElem = document.getElementById("remoteVideo-" + userId);
+    if (videoElem) {
+      videoElem.srcObject = null;
+      videoElem.remove();
+    }
+  }
+
+  // Обновление списка участников и авто-соединение
+  // Ожидается что сервер присылает msg.users = [{id: ..., name: ...}, ...]
+  function updateUsers(users) {
+    usersList.innerHTML = "";
+    users.forEach(({id, name}) => {
+      userMap[id] = name;
+      if (id !== myId) {
         const userDiv = document.createElement("div");
         userDiv.className = "user";
-        userDiv.textContent = u;
-        userDiv.onclick = () => startCall(u);
+        userDiv.textContent = name;
+        userDiv.onclick = () => startCall(id);
         usersList.appendChild(userDiv);
-      });
-    }
 
-    // Запуск камеры
-    startBtn.onclick = async () => {
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream;
-        statusText.textContent = "📷 Камера включена";
-      } catch (err) {
-        alert("Ошибка доступа к камере и микрофону: " + err.message);
+        if (!peerConnections[id]) {
+          startCall(id);
+        }
       }
-    };
+    });
+  }
 
-    // Демонстрация экрана
-    screenBtn.onclick = async () => {
-      try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        const videoSender = Object.values(peerConnections).flatMap(pc => pc.getSenders())
-          .find(sender => sender.track?.kind === 'video');
+  // Запуск камеры
+  startBtn.onclick = async () => {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+      statusText.textContent = "📷 Камера включена";
 
+      toggleMicBtn.disabled = false;
+      toggleCamBtn.disabled = false;
+      toggleMicBtn.textContent = "Выкл Микрофон";
+      toggleCamBtn.textContent = "Выкл Камера";
+    } catch (err) {
+      alert("Ошибка доступа к камере и микрофону: " + err.message);
+    }
+  };
+
+  // Вкл/выкл микрофон
+  toggleMicBtn.onclick = () => {
+    if (!localStream) return;
+    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+    toggleMicBtn.textContent = localStream.getAudioTracks()[0].enabled ? "Выкл Микрофон" : "Вкл Микрофон";
+  };
+
+  // Вкл/выкл камеру
+  toggleCamBtn.onclick = () => {
+    if (!localStream) return;
+    localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+    toggleCamBtn.textContent = localStream.getVideoTracks()[0].enabled ? "Выкл Камера" : "Вкл Камера";
+  };
+
+  // Демонстрация экрана
+  screenBtn.onclick = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      for (const pc of Object.values(peerConnections)) {
+        const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
         if (videoSender) {
           await videoSender.replaceTrack(screenStream.getVideoTracks()[0]);
         }
-        localVideo.srcObject = screenStream;
+      }
+      localVideo.srcObject = screenStream;
 
-        screenStream.getVideoTracks()[0].onended = async () => {
-          if (localStream) {
-            await videoSender.replaceTrack(localStream.getVideoTracks()[0]);
-            localVideo.srcObject = localStream;
+      screenStream.getVideoTracks()[0].onended = async () => {
+        if (localStream) {
+          for (const pc of Object.values(peerConnections)) {
+            const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+            if (videoSender) {
+              await videoSender.replaceTrack(localStream.getVideoTracks()[0]);
+            }
           }
-        };
-      } catch (err) {
-        alert("Ошибка при демонстрации экрана: " + err.message);
-      }
+          localVideo.srcObject = localStream;
+        }
+      };
+    } catch (err) {
+      alert("Ошибка при демонстрации экрана: " + err.message);
+    }
+  };
+
+  // Запись видео
+  recordBtn.onclick = () => {
+    const stream = remoteVideosContainer.querySelector("video")?.srcObject;
+    if (!stream) {
+      alert("Нет активного видео для записи.");
+      return;
+    }
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
     };
 
-    // Запись видео
-    recordBtn.onclick = () => {
-      const stream = remoteVideo.srcObject;
-      if (!stream) {
-        alert("Нет активного видео для записи.");
-        return;
-      }
-      recordedChunks = [];
-      mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
-
-      mediaRecorder.ondataavailable = e => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: "video/webm" });
-        const url = URL.createObjectURL(blob);
-        downloadLink.href = url;
-        downloadLink.download = `recording-${Date.now()}.webm`;
-        downloadLink.style.display = "inline-block";
-        statusText.textContent = "Запись остановлена, файл готов для скачивания.";
-      };
-
-      mediaRecorder.start();
-      statusText.textContent = "🔴 Запись началась...";
-      recordBtn.disabled = true;
-      stopBtn.disabled = false;
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: "video/webm" });
+      const url = URL.createObjectURL(blob);
+      downloadLink.href = url;
+      downloadLink.download = `recording-${Date.now()}.webm`;
+      downloadLink.style.display = "inline-block";
+      statusText.textContent = "Запись остановлена, файл готов для скачивания.";
     };
 
-    stopBtn.onclick = () => {
+    mediaRecorder.start();
+    statusText.textContent = "🔴 Запись началась...";
+    recordBtn.disabled = true;
+    stopBtn.disabled = false;
+  };
+
+  stopBtn.onclick = () => {
+    if (mediaRecorder) {
       mediaRecorder.stop();
       recordBtn.disabled = false;
       stopBtn.disabled = true;
-    };
+    }
+  };
 
-    // Начать вызов с другим пользователем
-    async function startCall(targetId) {
-      if (peerConnections[targetId]) {
-        alert("Соединение уже установлено");
-        return;
-      }
-      const pc = new RTCPeerConnection(rtcConfig);
-      peerConnections[targetId] = pc;
+  // Начать вызов с другим пользователем
+  async function startCall(targetId) {
+    if (peerConnections[targetId]) {
+      console.log(`Соединение с ${targetId} уже установлено`);
+      return;
+    }
+    const pc = new RTCPeerConnection(rtcConfig);
+    peerConnections[targetId] = pc;
 
-      if (localStream) {
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      }
-
-      pc.onicecandidate = e => {
-        if (e.candidate) {
-          ws.send(JSON.stringify({
-            type: "ice_candidate",
-            candidate: e.candidate,
-            target_id: targetId,
-            sender_id: myId
-          }));
-        }
-      };
-
-      pc.ontrack = e => {
-        remoteVideo.srcObject = e.streams[0];
-        statusText.textContent = `📡 Получен поток от ${targetId}`;
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      ws.send(JSON.stringify({
-        type: "webrtc_offer",
-        offer,
-        target_id: targetId,
-        sender_id: myId
-      }));
+    if (localStream) {
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
 
-    // Отправка чат-сообщения
-    function sendChatMessage() {
-      const text = chatInput.value.trim();
-      if (!text) return;
-      addChatMessage(text, true);
-      ws.send(JSON.stringify({
-        type: "chat_message",
-        message: text,
-        sender_id: myId
-      }));
-      chatInput.value = "";
-    }
-
-    sendChatBtn.onclick = sendChatMessage;
-    chatInput.onkeydown = e => {
-      if (e.key === "Enter") sendChatMessage();
-    };
-
-    // Передача файлов
-    fileInput.onchange = () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        // Передаем файл как base64 строку
-        const data = reader.result.split(',')[1]; // убрать префикс data:...base64,
+    pc.onicecandidate = e => {
+      if (e.candidate) {
         ws.send(JSON.stringify({
-          type: "file_transfer",
-          filename: file.name,
-          filetype: file.type,
-          data: data,
-          sender_id: myId,
-          target_id: null // разослать всем, можно расширить
+          type: "ice_candidate",
+          candidate: e.candidate,
+          target_id: targetId,
+          sender_id: myId
         }));
-        addChatMessage(`Файл отправлен: ${file.name}`, true, true, "");
-      };
-      reader.readAsDataURL(file);
-      fileInput.value = ""; // очистить input
+      }
     };
 
-    // Обработка сообщений от сервера
-    ws.onmessage = async e => {
-      const msg = JSON.parse(e.data);
+    pc.ontrack = e => {
+      addRemoteVideo(targetId, e.streams[0]);
+      statusText.textContent = `📡 Получен поток от ${userMap[targetId] || targetId}`;
+    };
 
-      if (msg.type === "user_joined" || msg.type === "user_left") {
-        updateUsers(msg.users);
-        return;
-      }
-
-      if (!msg.sender_id || msg.sender_id === myId) return;
-
-      if (msg.type === "chat_message") {
-        addChatMessage(msg.message, false);
-      }
-      else if (msg.type === "file_transfer") {
-        // Преобразуем base64 обратно в Blob и создаем ссылку для скачивания
-        const base64Data = msg.data;
-        const contentType = msg.filetype || "application/octet-stream";
-        const byteCharacters = atob(base64Data);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState;
+      statusText.textContent = `ICE connection state с ${userMap[targetId] || targetId}: ${state}`;
+      if (state === "failed" || state === "disconnected" || state === "closed") {
+        alert(`Соединение с ${userMap[targetId] || targetId} потеряно (${state})`);
+        removeRemoteVideo(targetId);
+        if (peerConnections[targetId]) {
+          peerConnections[targetId].close();
+          delete peerConnections[targetId];
         }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: contentType });
-        const url = URL.createObjectURL(blob);
-        addChatMessage(msg.filename, false, true, url);
       }
-      else if (
-        msg.type === "webrtc_offer" ||
-        msg.type === "webrtc_answer" ||
-        msg.type === "ice_candidate"
-      ) {
-        let pc = peerConnections[msg.sender_id];
-        if (!pc) {
-          pc = new RTCPeerConnection(rtcConfig);
-          peerConnections[msg.sender_id] = pc;
+    };
 
-          if (localStream) {
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-          }
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
 
-          pc.onicecandidate = e => {
-            if (e.candidate) {
-              ws.send(JSON.stringify({
-                type: "ice_candidate",
-                candidate: e.candidate,
-                target_id: msg.sender_id,
-                sender_id: myId
-              }));
-            }
-          };
+    ws.send(JSON.stringify({
+      type: "webrtc_offer",
+      offer,
+      target_id: targetId,
+      sender_id: myId
+    }));
+  }
 
-          pc.ontrack = e => {
-            remoteVideo.srcObject = e.streams[0];
-            statusText.textContent = `📡 Поток принят от ${msg.sender_id}`;
-          };
-        }
+  // Отправка чат-сообщения
+  function sendChatMessage() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    addChatMessage(text, true, false, '', userName);
+    ws.send(JSON.stringify({
+      type: "chat_message",
+      message: text,
+      sender_id: myId,
+      sender_name: userName
+    }));
+    chatInput.value = "";
+  }
 
-        if (msg.type === "webrtc_offer") {
-          await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          ws.send(JSON.stringify({
-            type: "webrtc_answer",
-            answer,
-            target_id: msg.sender_id,
-            sender_id: myId
-          }));
-        } else if (msg.type === "webrtc_answer") {
-          await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
-        } else if (msg.type === "ice_candidate") {
+  sendChatBtn.onclick = sendChatMessage;
+  chatInput.onkeydown = e => {
+    if (e.key === "Enter") sendChatMessage();
+  };
+
+  // Передача файлов
+  fileInput.onchange = () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = reader.result.split(',')[1]; // убрать префикс data:...base64,
+      ws.send(JSON.stringify({
+        type: "file_transfer",
+        filename: file.name,
+        filetype: file.type,
+        data: data,
+        sender_id: myId,
+        sender_name: userName,
+        target_id: null // разослать всем
+      }));
+      addChatMessage(`Файл отправлен: ${file.name}`, true, true, "");
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = "";
+  };
+
+  // Обработка сообщений от сервера
+  ws.onmessage = async e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === "user_joined") {
+      // Ожидается msg.users = [{id, name}, ...]
+      updateUsers(msg.users);
+      addChatMessage(`Пользователь ${msg.user_id} (${msg.user_name || ''}) присоединился`, false);
+      return;
+    }
+    if (msg.type === "user_left") {
+      updateUsers(msg.users);
+      addChatMessage(`Пользователь ${msg.user_id} (${msg.user_name || ''}) покинул комнату`, false);
+      removeRemoteVideo(msg.user_id);
+      if (peerConnections[msg.user_id]) {
+        peerConnections[msg.user_id].close();
+        delete peerConnections[msg.user_id];
+      }
+      return;
+    }
+
+    if (!msg.sender_id || msg.sender_id === myId) return;
+
+    if (msg.type === "chat_message") {
+      const senderName = msg.sender_name || userMap[msg.sender_id] || msg.sender_id;
+      addChatMessage(msg.message, false, false, '', senderName);
+    }
+    else if (msg.type === "file_transfer") {
+      const base64Data = msg.data;
+      const contentType = msg.filetype || "application/octet-stream";
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], {type: contentType});
+      const url = URL.createObjectURL(blob);
+      addChatMessage(msg.filename, false, true, url, msg.sender_name || userMap[msg.sender_id] || msg.sender_id);
+    }
+    else if (msg.type === "webrtc_offer") {
+      const fromId = msg.sender_id;
+      if (!peerConnections[fromId]) {
+        await startCall(fromId);
+      }
+      const pc = peerConnections[fromId];
+      await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      ws.send(JSON.stringify({
+        type: "webrtc_answer",
+        answer,
+        target_id: fromId,
+        sender_id: myId
+      }));
+    }
+    else if (msg.type === "webrtc_answer") {
+      const fromId = msg.sender_id;
+      const pc = peerConnections[fromId];
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+      }
+    }
+    else if (msg.type === "ice_candidate") {
+      const fromId = msg.sender_id;
+      const pc = peerConnections[fromId];
+      if (pc && msg.candidate) {
+        try {
           await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } catch (err) {
+          console.warn("Ошибка добавления ICE кандидата:", err);
         }
       }
-    };
+    }
+    else if (msg.type === "users_list") {
+      // Обновление списка участников с никами
+      updateUsers(msg.users);
+    }
+  };
 
-    ws.onopen = () => {
-      statusText.textContent = "🟢 Подключено к WebSocket";
-    };
+  ws.onopen = () => {
+    statusText.textContent = "🟢 WebSocket соединение установлено";
+    // Отправим серверу свой ник для обновления списка
+    ws.send(JSON.stringify({
+      type: "join",
+      user_id: myId,
+      user_name: userName
+    }));
+  };
 
-    ws.onerror = e => {
-      statusText.textContent = "🔴 Ошибка соединения WebSocket";
-      console.error(e);
-    };
+  ws.onclose = () => {
+    statusText.textContent = "🔴 WebSocket соединение закрыто";
+  };
 
-    ws.onclose = () => {
-      statusText.textContent = "🔴 WebSocket закрыт";
-    };
-  </script>
+  ws.onerror = err => {
+    console.error("WebSocket ошибка", err);
+    statusText.textContent = "❌ WebSocket ошибка";
+  };
+</script>
 </body>
 </html>
