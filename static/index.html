@@ -171,10 +171,17 @@
         <button id="sendChatBtn">Отправить</button>
       </div>
       <input type="file" id="fileInput" />
+      <label for="imageInput" style="cursor:pointer; margin-top:10px; display:inline-block; color:#2196f3; font-weight:600;">
+  Выберите изображение
+</label>
+<input type="file" id="imageInput" accept="image/*" style="display:none" />
+
     </div>
   </div>
 
 <script>
+  let lastSentMessage = "";
+
   // Параметры из URL
   const urlParams = new URLSearchParams(window.location.search);
   const roomId = urlParams.get('room') || "default";
@@ -182,7 +189,6 @@
   const userName = urlParams.get('name') ||  myId.substr(0,4);
 
   document.getElementById("roomId").textContent = roomId;
-  document.getElementById("myId").textContent = myId;
   document.getElementById("myId").textContent = userName;
 
   // Мапа userId → userName
@@ -207,6 +213,7 @@
   const chatInput = document.getElementById("chatInput");
   const sendChatBtn = document.getElementById("sendChatBtn");
   const fileInput = document.getElementById("fileInput");
+  const imageInput = document.getElementById("imageInput");
 
   // WebRTC и WebSocket
   const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
@@ -219,22 +226,32 @@
   let recordedChunks = [];
 
   // Функция для вывода сообщений в чат
-  function addChatMessage(text, fromSelf = false, isFile = false, fileUrl = '', senderName = '') {
-    const div = document.createElement("div");
-    div.style.fontWeight = fromSelf ? "bold" : "normal";
-    if (isFile) {
-      const link = document.createElement("a");
-      link.href = fileUrl;
-      link.target = "_blank";
-      link.textContent = text;
-      div.appendChild(document.createTextNode(fromSelf ? "Вы отправили файл: " : `Файл от ${senderName}: `));
-      div.appendChild(link);
-    } else {
-      div.textContent = fromSelf ? `Вы: ${text}` : `${senderName}: ${text}`;
-    }
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+  function addChatMessage(text, fromSelf = false, isFile = false, fileUrl = '', senderName = '', isImage = false) {
+  const div = document.createElement("div");
+  div.style.fontWeight = fromSelf ? "bold" : "normal";
+
+  if (isFile && isImage) {
+    const img = document.createElement("img");
+    img.src = fileUrl;
+    img.style.maxWidth = "100%";
+    img.style.maxHeight = "200px";
+    div.appendChild(document.createTextNode(fromSelf ? "Вы отправили изображение: " : `Изображение от ${senderName}: `));
+    div.appendChild(img);
+  } else if (isFile) {
+    const link = document.createElement("a");
+    link.href = fileUrl;
+    link.target = "_blank";
+    link.textContent = text;
+    div.appendChild(document.createTextNode(fromSelf ? "Вы отправили файл: " : `Файл от ${senderName}: `));
+    div.appendChild(link);
+  } else {
+    div.textContent = fromSelf ? `Вы: ${text}` : `${senderName}: ${text}`;
   }
+
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
 
   // Управление удалёнными видео
   function addRemoteVideo(userId, stream) {
@@ -263,15 +280,18 @@
   // Обновление списка участников и авто-соединение
   // Ожидается что сервер присылает msg.users = [{id: ..., name: ...}, ...]
   function updateUsers(users) {
-    usersList.innerHTML = "";
-    users.forEach(({id, name}) => {
-      userMap[id] = name;
-      if (id !== myId) {
-        const userDiv = document.createElement("div");
-        userDiv.className = "user";
-        userDiv.textContent = name;
-        userDiv.onclick = () => startCall(id);
-        usersList.appendChild(userDiv);
+  usersList.innerHTML = "";
+  console.log("Обновляем список участников:", users);
+  users.forEach(({id, name}) => {
+    userMap[id] = name || id || "User";
+
+    if (id !== myId) {
+      const userDiv = document.createElement("div");
+      userDiv.className = "user";
+      // Отображаем ник и ID вместе
+      userDiv.textContent = userMap[id];
+      userDiv.onclick = () => startCall(id);
+      usersList.appendChild(userDiv);
 
         if (!peerConnections[id]) {
           startCall(id);
@@ -432,6 +452,9 @@
   function sendChatMessage() {
     const text = chatInput.value.trim();
     if (!text) return;
+
+    lastSentMessage = text;
+
     addChatMessage(text, true, false, '', userName);
     ws.send(JSON.stringify({
       type: "chat_message",
@@ -448,25 +471,55 @@
   };
 
   // Передача файлов
-  fileInput.onchange = () => {
-    const file = fileInput.files[0];
+fileInput.onchange = () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    const base64Data = reader.result.split(',')[1]; // base64 без префикса
+
+    ws.send(JSON.stringify({
+      type: "file_transfer",
+      filename: file.name,
+      filetype: file.type,
+      data: base64Data,
+      sender_id: myId,
+      sender_name: userName,
+      target_id: null
+    }));
+
+    // Создаём локальный URL из Blob для отображения ссылки в чате
+    const blob = new Blob([file], { type: file.type });
+    const url = URL.createObjectURL(blob);
+
+    addChatMessage(`Файл отправлен: ${file.name}`, true, true, url);
+  };
+
+  reader.readAsDataURL(file);
+  fileInput.value = "";
+};
+
+
+  imageInput.onchange = () => {
+    const file = imageInput.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const data = reader.result.split(',')[1]; // убрать префикс data:...base64,
+      const data = reader.result.split(',')[1];
       ws.send(JSON.stringify({
-        type: "file_transfer",
+        type: "image_transfer",
         filename: file.name,
         filetype: file.type,
         data: data,
         sender_id: myId,
-        sender_name: userName,
-        target_id: null // разослать всем
+        sender_name: userName
       }));
-      addChatMessage(`Файл отправлен: ${file.name}`, true, true, "");
+      addChatMessage("Изображение отправлено", true, true, reader.result, userName, true);
     };
     reader.readAsDataURL(file);
-    fileInput.value = "";
+    imageInput.value = "";
   };
 
   // Обработка сообщений от сервера
@@ -490,25 +543,69 @@
       return;
     }
 
-    if (!msg.sender_id || msg.sender_id === myId) return;
+    if (!msg.sender_id) return;
+
 
     if (msg.type === "chat_message") {
       const senderName = msg.sender_name || userMap[msg.sender_id] || msg.sender_id;
+      if (msg.sender_id === myId && msg.message === lastSentMessage) {
+    lastSentMessage = "";  // сбрасываем, чтобы следующая проверка сработала
+    return;
+  }
       addChatMessage(msg.message, false, false, '', senderName);
     }
     else if (msg.type === "file_transfer") {
-      const base64Data = msg.data;
-      const contentType = msg.filetype || "application/octet-stream";
-      const byteCharacters = atob(base64Data);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], {type: contentType});
-      const url = URL.createObjectURL(blob);
-      addChatMessage(msg.filename, false, true, url, msg.sender_name || userMap[msg.sender_id] || msg.sender_id);
-    }
+  const base64Data = msg.data;
+  const contentType = msg.filetype || "application/octet-stream";
+
+
+  // Декодируем base64 в байты
+  const byteCharacters = atob(base64Data);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+
+  // Создаём Blob и URL для скачивания
+  const blob = new Blob([byteArray], { type: contentType });
+  const url = URL.createObjectURL(blob);
+
+  addChatMessage(
+    msg.filename,
+    false,
+    true,
+    url,
+    msg.sender_name || userMap[msg.sender_id] || msg.sender_id
+  );
+}
+else if (msg.type === "image_transfer") {
+  const base64Data = msg.data;
+  const contentType = msg.filetype || "application/octet-stream";
+
+  // Декодируем base64 в байты
+  const byteCharacters = atob(base64Data);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+
+  // Создаём Blob и URL для изображения
+  const blob = new Blob([byteArray], { type: contentType });
+  const url = URL.createObjectURL(blob);
+
+  // Передаем isImage = true!
+  addChatMessage(
+    "Изображение",
+    false,
+    true,
+    url,
+    msg.sender_name || userMap[msg.sender_id] || msg.sender_id,
+    true  // <-- ВАЖНО: указываем, что это изображение
+  );
+}
+
     else if (msg.type === "webrtc_offer") {
       const fromId = msg.sender_id;
       if (!peerConnections[fromId]) {

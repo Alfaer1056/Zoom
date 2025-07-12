@@ -20,56 +20,99 @@ from aiortc.contrib.media import MediaPlayer
 
 # ---------- FastAPI Setup ----------
 app = FastAPI()
-rooms: Dict[str, Dict[str, WebSocket]] = {}
+
+# Теперь словарь: room_id → client_id → {"ws": websocket, "name": username}
+rooms: Dict[str, Dict[str, dict]] = {}
+message_history: Dict[str, list] = {}  # Храним историю сообщений по комнатам
 
 class ConnectionManager:
-    async def connect(self, room_id: str, client_id: str, websocket: WebSocket):
+    async def connect(self, room_id: str, client_id: str, websocket: WebSocket, user_name: str = None):
         await websocket.accept()
         if room_id not in rooms:
             rooms[room_id] = {}
-        rooms[room_id][client_id] = websocket
+        rooms[room_id][client_id] = {"ws": websocket, "name": user_name or client_id}
+
+        users_list = [{"id": cid, "name": info["name"]} for cid, info in rooms[room_id].items()]
+
         await self.broadcast(room_id, {
             "type": "user_joined",
             "user_id": client_id,
-            "users": list(rooms[room_id].keys())
+            "users": users_list
         })
 
     async def disconnect(self, room_id: str, client_id: str):
         if room_id in rooms and client_id in rooms[room_id]:
             del rooms[room_id][client_id]
-            await self.broadcast(room_id, {
-                "type": "user_left",
-                "user_id": client_id,
-                "users": list(rooms[room_id].keys()) if room_id in rooms else []
-            })
+
+            if room_id in rooms:
+                users_list = [{"id": cid, "name": info["name"]} for cid, info in rooms[room_id].items()]
+                await self.broadcast(room_id, {
+                    "type": "user_left",
+                    "user_id": client_id,
+                    "users": users_list
+                })
+
             if room_id in rooms and not rooms[room_id]:
                 del rooms[room_id]
 
     async def broadcast(self, room_id: str, message: dict):
         if room_id in rooms:
-            for ws in rooms[room_id].values():
-                await ws.send_text(json.dumps(message))
+            for info in rooms[room_id].values():
+                await info["ws"].send_text(json.dumps(message))
 
 manager = ConnectionManager()
 
 @app.websocket("/ws/{room_id}/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str):
-    await manager.connect(room_id, client_id, websocket)
+    user_name = client_id  # по умолчанию имя = id пользователя
+    await manager.connect(room_id, client_id, websocket, user_name)
+
+    # Отправляем историю сообщений новому подключившемуся
+    if room_id in message_history:
+        for msg in message_history[room_id]:
+            await websocket.send_text(json.dumps(msg))
+
     try:
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
-            if message["type"] in ["webrtc_offer", "webrtc_answer", "webrtc_candidate", "chat_message"]:
-                target_id = message.get("target_id")
-                if message["type"] == "chat_message":
-                    for cid, ws in rooms.get(room_id, {}).items():
-                        if cid != client_id:
-                            await ws.send_text(data)
-                else:
-                    if target_id in rooms.get(room_id, {}):
-                        await rooms[room_id][target_id].send_text(data)
+            msg_type = message.get("type")
+            target_id = message.get("target_id")
+
+            if msg_type == "join":
+                # Обновляем имя пользователя
+                user_name = message.get("user_name", client_id)
+                if room_id in rooms and client_id in rooms[room_id]:
+                    rooms[room_id][client_id]["name"] = user_name
+
+                # Отправляем обновлённый список пользователей в комнате
+                users_list = [{"id": cid, "name": info["name"]} for cid, info in rooms[room_id].items()]
+                await manager.broadcast(room_id, {
+                    "type": "users_list",
+                    "users": users_list
+                })
+                continue
+
+            # Сохраняем в историю нужные сообщения
+            if msg_type in ["chat_message", "file_transfer", "image_transfer"]:
+                message_history.setdefault(room_id, []).append(message)
+
+            # Ретрансляция сообщений
+            if msg_type in ["webrtc_offer", "webrtc_answer", "ice_candidate"]:
+                if target_id in rooms.get(room_id, {}):
+                    await rooms[room_id][target_id]["ws"].send_text(data)
+
+            elif msg_type in ["chat_message", "file_transfer", "image_transfer"]:
+                for cid, info in rooms.get(room_id, {}).items():
+                    if cid != client_id:
+                        await info["ws"].send_text(data)
+
     except WebSocketDisconnect:
         await manager.disconnect(room_id, client_id)
+
+    # Очистка истории, если комната пустая
+    if room_id in rooms and not rooms[room_id]:
+        message_history.pop(room_id, None)
 
 @app.get("/api/rooms/{room_id}/exists")
 async def room_exists(room_id: str):
@@ -140,7 +183,7 @@ class AioHttpMiddleware(BaseHTTPMiddleware):
             return req
         return await call_next(request)
 
-# (ОБРАТИ ВНИМАНИЕ: этот middleware не полностью стабилен — лучше запускать aiohttp отдельно)
+# (Этот middleware не полностью стабилен — лучше запускать aiohttp отдельно)
 
 # ---------- Запуск ----------
 if __name__ == "__main__":
