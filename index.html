@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebRTC E2EE Demo</title>
+</head>
+<body>
+  <h2>Local Video</h2>
+  <video id="localVideo" autoplay muted></video>
+
+  <h2>Remote Video</h2>
+  <video id="remoteVideo" autoplay></video>
+
+  <br>
+  <button onclick="start()">Start</button>
+</body>
+
+<script>
+  let localStream;
+  let pc1;
+  let pc2;
+
+  async function start() {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+    document.getElementById('localVideo').srcObject = localStream;
+
+    const config = { iceServers: [] };
+    pc1 = new RTCPeerConnection(config);
+    pc2 = new RTCPeerConnection(config);
+
+    // Перенаправление ICE-кандидатов
+    pc1.onicecandidate = e => e.candidate && pc2.addIceCandidate(e.candidate);
+    pc2.onicecandidate = e => e.candidate && pc1.addIceCandidate(e.candidate);
+
+    // Когда pc2 получает трек — отображаем видео
+    pc2.ontrack = e => {
+      document.getElementById('remoteVideo').srcObject = e.streams[0];
+    };
+
+    // Добавляем медиа в соединение
+    localStream.getTracks().forEach(track => pc1.addTrack(track, localStream));
+
+    const offer = await pc1.createOffer();
+    await pc1.setLocalDescription(offer);
+    await pc2.setRemoteDescription(pc1.localDescription);
+
+    const answer = await pc2.createAnswer();
+    await pc2.setLocalDescription(answer);
+    await pc1.setRemoteDescription(pc2.localDescription);
+  }
+</script>
+</html>
