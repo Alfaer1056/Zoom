@@ -1,10 +1,3 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <title>WebRTC с чатом и передачей файлов (с никами)</title>
-  <link rel="stylesheet" href="style.css" />
-  <style>
 /* Стили как у тебя */
     body {
       font-family: Arial, sans-serif;
@@ -136,55 +129,3 @@
       color: green;
       min-height: 18px;
     }
-  </style>
-</head>
-<body>
-  <div id="video-section">
-    <h2>Комната: <span id="roomId"></span></h2>
-    <p>Ваш Ник: <span id="myId"></span></p>
-
-    <div id="controls">
-      <button id="startBtn">Start Camera</button>
-      <button id="toggleMicBtn" disabled>Выкл Микрофон</button>
-      <button id="toggleCamBtn" disabled>Выкл Камера</button>
-      <button id="screenBtn">Share Screen</button>
-      <button id="recordBtn">Record</button>
-      <button id="stopBtn" disabled>Stop</button>
-      <a id="downloadLink" href="#" download>Download Recording</a>
-    </div>
-
-    <video id="localVideo" autoplay muted playsinline></video>
-
-<!-- Новый блок для второго экрана -->
-<video id="secondScreen" autoplay playsinline style="background:black; width:90%; max-height:45vh; margin-top:10px; border:1px solid #ccc;"></video>
-
-<div id="remoteVideosContainer"></div>
-
-
-    <div id="statusText"></div>
-  </div>
-
-  <div id="sidebar">
-    <div id="room-info">
-      <h3>Участники</h3>
-      <div id="usersList"></div>
-    </div>
-
-    <div id="chat">
-      <div id="chatMessages"></div>
-      <div id="chatInputContainer">
-        <input type="text" id="chatInput" placeholder="Введите сообщение..." />
-        <button id="sendChatBtn">Отправить</button>
-      </div>
-      <input type="file" id="fileInput" />
-      <label for="imageInput" style="cursor:pointer; margin-top:10px; display:inline-block; color:#2196f3; font-weight:600;">
-  Выберите изображение
-</label>
-<input type="file" id="imageInput" accept="image/*" style="display:none" />
-
-    </div>
-  </div>
-
-  <script src="script.js"></script>
-</body>
-</html>
