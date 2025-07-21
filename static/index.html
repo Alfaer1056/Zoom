@@ -156,7 +156,11 @@
     <video id="localVideo" autoplay muted playsinline></video>
 
 <!-- Новый блок для второго экрана -->
-<video id="secondScreen" autoplay playsinline style="background:black; width:90%; max-height:45vh; margin-top:10px; border:1px solid #ccc;"></video>
+ <select id="screenSelect" style="margin-bottom: 10px; padding: 5px;">
+  <option value="">Выбрать экран</option>
+</select>
+<video id="secondScreen" autoplay playsinline muted ="width: 1200px; height: 1000px; background: black;"></video>
+
 
 <div id="remoteVideosContainer"></div>
 

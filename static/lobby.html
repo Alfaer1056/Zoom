@@ -7,13 +7,17 @@
   body { font-family: Arial, sans-serif; max-width: 400px; margin: auto; padding: 20px; }
   input, button { width: 100%; padding: 10px; margin: 5px 0; box-sizing: border-box; }
   .error { color: red; margin-top: 10px; }
+  #userList { margin-top: 20px; }
+  .user { padding: 8px; border: 1px solid #ccc; margin-bottom: 5px; border-radius: 5px; cursor: pointer; }
+  .user:hover { background-color: #f0f0f0; }
+  .admin { font-weight: bold; color: darkgreen; }
 </style>
 </head>
 <body>
   <h2>Создать комнату</h2>
   <form id="createForm">
     <label>Ваш ID:</label><br/>
-    <input type="text" id="createUserId" placeholder="Введите имя" required /><br/>
+    <input type="text" id="createMyid" placeholder="Введите имя" required /><br/>
     <label>Имя новой комнаты:</label><br/>
     <input type="text" id="createRoomId" placeholder="Введите имя комнаты" required /><br/>
     <button type="submit">Создать</button>
@@ -24,7 +28,7 @@
   <h2>Присоединиться к комнате</h2>
   <form id="joinForm">
     <label>Ваш ID:</label><br/>
-    <input type="text" id="joinUserId" placeholder="Введите имя" required /><br/>
+    <input type="text" id="joinMyid" placeholder="Введите имя" required /><br/>
     <label>Имя комнаты:</label><br/>
     <input type="text" id="joinRoomId" placeholder="Введите имя комнаты" required /><br/>
     <button type="submit">Присоединиться</button>
@@ -32,27 +36,69 @@
 
   <div id="error" class="error"></div>
 
+  <div id="userList"></div>
+
 <script>
   const errorDiv = document.getElementById('error');
+  const userListDiv = document.getElementById('userList');
 
-  // Создать комнату — просто перейти на комнату, она создастся при подключении
-  document.getElementById('createForm').addEventListener('submit', e => {
+  // Показать список пользователей в комнате
+  async function showUsers(roomName) {
+    try {
+      const resp = await fetch(`/api/rooms/${encodeURIComponent(roomName)}/users`);
+      const data = await resp.json();
+
+      if (!Array.isArray(data.users)) return;
+
+      userListDiv.innerHTML = '<h3>Пользователи в комнате:</h3>';
+      data.users.forEach((user, index) => {
+        const div = document.createElement('div');
+        div.className = 'user' + (index === 0 ? ' admin' : '');
+        div.textContent = (index === 0 ? 'Админ: ' : 'Участник: ') + user;
+        div.onclick = () => alert(`Вы кликнули по пользователю: ${user}`);
+        userListDiv.appendChild(div);
+      });
+    } catch (e) {
+      console.error("Ошибка загрузки пользователей:", e);
+    }
+  }
+
+  // Обработчик создания комнаты
+  document.getElementById('createForm').addEventListener('submit', async e => {
     e.preventDefault();
     errorDiv.textContent = "";
-    const user = document.getElementById('createUserId').value.trim();
+    const user = document.getElementById('createMyid').value.trim();
     const room = document.getElementById('createRoomId').value.trim();
     if (!user || !room) {
       errorDiv.textContent = "Пожалуйста, заполните все поля для создания комнаты.";
       return;
     }
-    window.location.href = `/index.html?room=${encodeURIComponent(room)}&user=${encodeURIComponent(user)}`;
+
+    try {
+      const resp = await fetch('/api/rooms/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, room })
+      });
+
+      if (!resp.ok) {
+        const error = await resp.json();
+        errorDiv.textContent = error.detail || "Не удалось создать комнату.";
+        return;
+      }
+
+      window.location.href = `/index.html?room=${encodeURIComponent(room)}&user=${encodeURIComponent(user)}`;
+    } catch (err) {
+      errorDiv.textContent = "Ошибка при создании комнаты.";
+      console.error(err);
+    }
   });
 
-  // Присоединиться к комнате — проверяем через API, существует ли комната
+  // Обработчик присоединения к комнате
   document.getElementById('joinForm').addEventListener('submit', async e => {
     e.preventDefault();
     errorDiv.textContent = "";
-    const user = document.getElementById('joinUserId').value.trim();
+    const user = document.getElementById('joinMyid').value.trim();
     const room = document.getElementById('joinRoomId').value.trim();
     if (!user || !room) {
       errorDiv.textContent = "Пожалуйста, заполните все поля для присоединения.";
@@ -71,6 +117,13 @@
       console.error(err);
     }
   });
+
+  // Если в URL уже указан room, подгружаем пользователей
+  const urlParams = new URLSearchParams(window.location.search);
+  const roomParam = urlParams.get('room');
+  if (roomParam) {
+    showUsers(roomParam);
+  }
 </script>
 </body>
 </html>

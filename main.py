@@ -76,22 +76,40 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
-            msg_type = message.get("type")
-            target_id = message.get("target_id")
-
-            if msg_type == "join":
-                # Обновляем имя пользователя
-                user_name = message.get("user_name", client_id)
-                if room_id in rooms and client_id in rooms[room_id]:
-                    rooms[room_id][client_id]["name"] = user_name
-
-                # Отправляем обновлённый список пользователей в комнате
-                users_list = [{"id": cid, "name": info["name"]} for cid, info in rooms[room_id].items()]
-                await manager.broadcast(room_id, {
-                    "type": "users_list",
-                    "users": users_list
-                })
+            if message["type"] == "kick_user":
+                target_id = message["target_id"]
+                target_ws = active_users.get(room_id, {}).get(target_id)
+                if target_ws:
+                    print(f"[KICK] Админ кикнул пользователя {target_id}")
+                    print(f"[SEND] Отправляем kicked пользователю {target_id}")
+                    await target_ws.send_text(json.dumps({"type": "kicked"}))
+                    await target_ws.close()
+                    del active_users[room_id][target_id]
                 continue
+
+                # Ищем пользователя в комнате
+                target_ws = rooms[room_id]["users"].get(target_id)
+                if target_ws:
+                    # Сообщаем кикнутому
+                    await target_ws.send_text(json.dumps({
+                        "type": "kicked",
+                        "reason": "Вы были кикнуты администратором"
+                    }))
+                    await target_ws.close()
+
+                    # Удаляем из комнаты
+                    del rooms[room_id]["users"][target_id]
+
+                    # Сообщаем остальным, что этот пользователь вышел
+                    for uid, ws in rooms[room_id]["users"].items():
+                        await ws.send_text(json.dumps({
+                            "type": "user_left",
+                            "user_id": target_id,
+                            "user_name": rooms[room_id]["usernames"].get(target_id, "")
+                        }))
+                    continue  # Не обрабатывать остальную логику для этого сообщения
+
+            msg_type = message.get("type")
 
             # Сохраняем в историю нужные сообщения
             if msg_type in ["chat_message", "file_transfer", "image_transfer"]:
@@ -117,6 +135,19 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
 @app.get("/api/rooms/{room_id}/exists")
 async def room_exists(room_id: str):
     return {"exists": room_id in rooms}
+
+from fastapi.responses import JSONResponse
+from fastapi import Request
+
+@app.post("/api/rooms/create")
+async def create_room(request: Request):
+    data = await request.json()
+    room = data.get("room")
+    user = data.get("user")
+    if not room or not user:
+        return JSONResponse({"detail": "Missing room or user"}, status_code=400)
+    return JSONResponse({"status": "ok"})
+
 
 @app.get("/")
 async def root():

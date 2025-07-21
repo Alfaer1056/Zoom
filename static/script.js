@@ -110,24 +110,46 @@
   // Ожидается что сервер присылает msg.users = [{id: ..., name: ...}, ...]
   function updateUsers(users) {
   usersList.innerHTML = "";
-  console.log("Обновляем список участников:", users);
+  const isAdmin = myId === "1"; // первый вошедший — админ
+
   users.forEach(({id, name}) => {
     userMap[id] = name || id || "User";
 
-    if (id !== myId) {
-      const userDiv = document.createElement("div");
-      userDiv.className = "user";
-      // Отображаем ник и ID вместе
-      userDiv.textContent = userMap[id];
-      userDiv.onclick = () => startCall(id);
-      usersList.appendChild(userDiv);
+    const userDiv = document.createElement("div");
+    userDiv.className = "user";
+    userDiv.textContent = userMap[id];
 
-        if (!peerConnections[id]) {
-          startCall(id);
-        }
-      }
-    });
-  }
+    // Кнопки кик и мут для админа (кроме самого себя)
+    if (isAdmin && id !== myId) {
+      const kickBtn = document.createElement("button");
+      kickBtn.textContent = "Кик";
+      kickBtn.style.marginLeft = "10px";
+      kickBtn.onclick = () => {
+        // Отправляем сообщение серверу с командой кика пользователя
+        ws.send(JSON.stringify({
+          type: "kick_user",
+          target_id: id,
+          sender_id: myId
+        }));
+      };
+
+      const muteBtn = document.createElement("button");
+      muteBtn.textContent = "Мут";
+      muteBtn.style.marginLeft = "5px";
+      // Пока без реализации, просто кнопка
+      muteBtn.onclick = () => {
+        alert(`Пользователь ${userMap[id]} был бы замучен 🙂`);
+      };
+
+      userDiv.appendChild(kickBtn);
+      userDiv.appendChild(muteBtn);
+    }
+
+    usersList.appendChild(userDiv);
+  });
+}
+
+
 
   // Запуск камеры
   startBtn.onclick = async () => {
@@ -443,6 +465,13 @@ fileInput.onchange = () => {
 
     console.log("<< WS message:", msg);
 
+
+    if (msg.type === "kicked") {
+    alert("Вы были кикнуты администратором");
+    window.location.href = "/lobby.html";
+    return;
+  }
+
     if (msg.type === "user_joined") {
       // Ожидается msg.users = [{id, name}, ...]
       updateUsers(msg.users);
@@ -669,3 +698,11 @@ fileInput.onchange = () => {
     console.error("WebSocket ошибка", err);
     statusText.textContent = "❌ WebSocket ошибка";
   };
+  function kickUser(targetId) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: "kick_user",
+      target_id: targetId
+    }));
+  }
+}
