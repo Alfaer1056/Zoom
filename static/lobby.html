@@ -124,6 +124,13 @@
   if (roomParam) {
     showUsers(roomParam);
   }
+  window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('message') === 'excluded') {
+      alert("Вас исключили из комнаты администратором.");
+      // Если хочешь, вместо alert можно добавить красивое сообщение в саму страницу.
+    }
+  });
 </script>
 </body>
 </html>

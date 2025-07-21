@@ -141,8 +141,16 @@
         alert(`Пользователь ${userMap[id]} был бы замучен 🙂`);
       };
 
+      const banButton = document.createElement("button");
+  banButton.textContent = "Бан";
+  banButton.onclick = () => {
+    alert(`Пользователь ${user.name || user.id} забанен`);
+    // или console.log(`Пользователь ${user.name || user.id} забанен`);
+  };
+
       userDiv.appendChild(kickBtn);
       userDiv.appendChild(muteBtn);
+      userDiv.appendChild(banButton);
     }
 
     usersList.appendChild(userDiv);
@@ -468,7 +476,7 @@ fileInput.onchange = () => {
 
     if (msg.type === "kicked") {
     alert("Вы были кикнуты администратором");
-    window.location.href = "/lobby.html";
+    window.location.href = "/lobby.html?message=excluded";
     return;
   }
 

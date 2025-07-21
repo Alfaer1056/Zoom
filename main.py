@@ -24,6 +24,7 @@ app = FastAPI()
 # Теперь словарь: room_id → client_id → {"ws": websocket, "name": username}
 rooms: Dict[str, Dict[str, dict]] = {}
 message_history: Dict[str, list] = {}  # Храним историю сообщений по комнатам
+active_users = {}
 
 class ConnectionManager:
     async def connect(self, room_id: str, client_id: str, websocket: WebSocket, user_name: str = None):
@@ -67,6 +68,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
     user_name = client_id  # по умолчанию имя = id пользователя
     await manager.connect(room_id, client_id, websocket, user_name)
 
+    # <-- ВСТАВИТЬ РЕГИСТРАЦИЮ active_users ЗДЕСЬ -->
+    active_users.setdefault(room_id, {})[client_id] = websocket
+
     # Отправляем историю сообщений новому подключившемуся
     if room_id in message_history:
         for msg in message_history[room_id]:
@@ -76,15 +80,36 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
+
             if message["type"] == "kick_user":
                 target_id = message["target_id"]
                 target_ws = active_users.get(room_id, {}).get(target_id)
+                if not target_ws:
+                    target_ws = rooms.get(room_id, {}).get("users", {}).get(target_id)
+
                 if target_ws:
                     print(f"[KICK] Админ кикнул пользователя {target_id}")
-                    print(f"[SEND] Отправляем kicked пользователю {target_id}")
                     await target_ws.send_text(json.dumps({"type": "kicked"}))
+                    await asyncio.sleep(0.2)
                     await target_ws.close()
-                    del active_users[room_id][target_id]
+
+                    if room_id in active_users and target_id in active_users[room_id]:
+                        del active_users[room_id][target_id]
+                        if not active_users[room_id]:  # <-- УДАЛЯЕМ ПУСТУЮ КОМНАТУ
+                            del active_users[room_id]
+
+                    if room_id in rooms and "users" in rooms[room_id] and target_id in rooms[room_id]["users"]:
+                        del rooms[room_id]["users"][target_id]
+
+                    if room_id in rooms and "users" in rooms[room_id]:
+                        for uid, ws in rooms[room_id]["users"].items():
+                            await ws.send_text(json.dumps({
+                                "type": "user_left",
+                                "user_id": target_id,
+                                "user_name": rooms[room_id].get("usernames", {}).get(target_id, "")
+                            }))
+                else:
+                    print(f"[KICK] Не найден пользователь {target_id} в комнате {room_id}")
                 continue
 
                 # Ищем пользователя в комнате
@@ -131,6 +156,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
     # Очистка истории, если комната пустая
     if room_id in rooms and not rooms[room_id]:
         message_history.pop(room_id, None)
+
 
 @app.get("/api/rooms/{room_id}/exists")
 async def room_exists(room_id: str):
